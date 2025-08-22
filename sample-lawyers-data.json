@@ -1,0 +1,118 @@
+{
+  "participants": [
+    {
+      "id": "1",
+      "name": "أحمد محمد علي",
+      "phone": "01012345678",
+      "governorate": "القاهرة",
+      "cases": 15,
+      "revenue": 45000,
+      "participated": true,
+      "subscribed": true,
+      "receivedFreeCase": false
+    },
+    {
+      "id": "2",
+      "name": "فاطمة حسن محمود",
+      "phone": "01123456789",
+      "governorate": "الجيزة",
+      "cases": 12,
+      "revenue": 38000,
+      "participated": true,
+      "subscribed": true,
+      "receivedFreeCase": true
+    },
+    {
+      "id": "3",
+      "name": "محمد عبد الرحمن",
+      "phone": "01234567890",
+      "governorate": "الإسكندرية",
+      "cases": 20,
+      "revenue": 60000,
+      "participated": true,
+      "subscribed": false,
+      "receivedFreeCase": false
+    },
+    {
+      "id": "4",
+      "name": "سارة أحمد عبد الله",
+      "phone": "01098765432",
+      "governorate": "القاهرة",
+      "cases": 8,
+      "revenue": 25000,
+      "participated": true,
+      "subscribed": true,
+      "receivedFreeCase": true
+    }
+  ],
+  "nonParticipants": [
+    {
+      "id": "5",
+      "name": "عمر خالد محمد",
+      "phone": "01187654321",
+      "governorate": "الجيزة",
+      "cases": 0,
+      "revenue": 0,
+      "participated": false,
+      "subscribed": false,
+      "receivedFreeCase": true
+    },
+    {
+      "id": "6",
+      "name": "نورا سامي حسن",
+      "phone": "01276543210",
+      "governorate": "الإسكندرية",
+      "cases": 0,
+      "revenue": 0,
+      "participated": false,
+      "subscribed": true,
+      "receivedFreeCase": false
+    },
+    {
+      "id": "7",
+      "name": "يوسف عادل إبراهيم",
+      "phone": "01065432109",
+      "governorate": "القاهرة",
+      "cases": 0,
+      "revenue": 0,
+      "participated": false,
+      "subscribed": false,
+      "receivedFreeCase": false
+    }
+  ],
+  "freeCases": [
+    {
+      "id": "8",
+      "name": "مريم طارق عثمان",
+      "phone": "01154321098",
+      "governorate": "الجيزة",
+      "cases": 3,
+      "revenue": 0,
+      "participated": false,
+      "subscribed": true,
+      "receivedFreeCase": true
+    },
+    {
+      "id": "9",
+      "name": "حسام محمود علي",
+      "phone": "01043210987",
+      "governorate": "الإسكندرية",
+      "cases": 2,
+      "revenue": 0,
+      "participated": true,
+      "subscribed": false,
+      "receivedFreeCase": true
+    },
+    {
+      "id": "10",
+      "name": "ليلى عبد الفتاح",
+      "phone": "01032109876",
+      "governorate": "القاهرة",
+      "cases": 1,
+      "revenue": 0,
+      "participated": false,
+      "subscribed": true,
+      "receivedFreeCase": true
+    }
+  ]
+}
