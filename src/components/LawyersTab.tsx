@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,12 +6,13 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Plus, Search, Edit, Trash2, Scale, Phone } from "lucide-react";
-import { Lawyer, Expense, Campaign } from "@/types/crm";
+import { Textarea } from "@/components/ui/textarea";
+import { SearchAndFilter } from "@/components/SearchAndFilter";
+import { Plus, Search, Users, UserCheck, UserX, Gift, Phone, Edit, Trash2, RefreshCw, Download, Upload, AlertCircle } from "lucide-react";
+import { Lawyer, Campaign, Expense } from "@/types/crm";
 import { useToast } from "@/hooks/use-toast";
+import { useSearch } from "@/hooks/useSearch";
 import { lawyersService } from "@/lib/database";
 
 interface LawyersTabProps {
@@ -24,443 +25,208 @@ interface LawyersTabProps {
 }
 
 export function LawyersTab({ lawyers, setLawyers, expenses, setExpenses, campaigns, onDataChange }: LawyersTabProps) {
-  const [searchTerm, setSearchTerm] = useState("");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
-  const [newLawyer, setNewLawyer] = useState<Omit<Lawyer, "id">>({
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [isReorderDialogOpen, setIsReorderDialogOpen] = useState(false);
+  const [editingLawyer, setEditingLawyer] = useState<Lawyer | null>(null);
+  const [reorderingLawyer, setReorderingLawyer] = useState<Lawyer | null>(null);
+  const [reorderCases, setReorderCases] = useState(1);
+  const [newLawyer, setNewLawyer] = useState<Partial<Lawyer>>({
     name: "",
     phone: "",
-    governorate: "",
-    campaignId: "",
+    governorate: "غير محدد",
+    gender: "ذكر",
     status: "active",
     maxCases: 10,
-    availableCases: 0,
+    availableCases: 10,
     takenCases: 0,
-    pricePerCase: 0,
+    pricePerCase: 150,
+    revenue: 0,
     isSubscribed: false,
     hasFreeCaseUsed: false,
     notes: ""
   });
   const { toast } = useToast();
-  
-  // حالة حوار أخذ قضية مع تاريخ مخصص
-  const [takeCaseDialogOpen, setTakeCaseDialogOpen] = useState(false);
-  const [selectedLawyerForCase, setSelectedLawyerForCase] = useState<string>("");
-  const [customCaseDate, setCustomCaseDate] = useState(new Date().toISOString().split('T')[0]);
-  const [orderDate, setOrderDate] = useState(new Date().toISOString().split('T')[0]);
 
-  const filteredLawyers = lawyers.filter(lawyer =>
-    lawyer.id.toString().includes(searchTerm)
-  );
+  const searchConfig = {
+    searchFields: ['name', 'phone', 'governorate'],
+    filterFields: {
+      governorate: lawyers.map(l => l.governorate).filter(Boolean),
+      status: ['active', 'inactive'],
+      isSubscribed: [true, false]
+    }
+  };
+
+  const {
+    searchTerm,
+    setSearchTerm,
+    filters,
+    updateFilter,
+    clearFilters,
+    filteredData: filteredLawyers,
+    hasActiveFilters,
+    resultCount,
+    totalCount
+  } = useSearch(lawyers, searchConfig);
+
+  const filterOptions = [
+    {
+      label: "المحافظة",
+      field: "governorate",
+      options: [...new Set(lawyers.map(l => l.governorate).filter(Boolean))].map(gov => ({
+        value: gov!,
+        label: gov!
+      }))
+    },
+    {
+      label: "الحالة",
+      field: "status",
+      options: [
+        { value: "active", label: "نشط" },
+        { value: "inactive", label: "غير نشط" }
+      ]
+    },
+    {
+      label: "الاشتراك",
+      field: "isSubscribed",
+      options: [
+        { value: "true", label: "مشترك" },
+        { value: "false", label: "غير مشترك" }
+      ]
+    }
+  ];
 
   const addLawyer = async () => {
-    if (!newLawyer.name || !newLawyer.phone || !newLawyer.governorate || !newLawyer.maxCases || newLawyer.maxCases <= 0) {
+    if (!newLawyer.name || !newLawyer.phone) {
       toast({
         title: "خطأ",
-        description: "يرجى ملء جميع الحقول المطلوبة (الاسم، الهاتف، المحافظة) وتحديد عدد صحيح للقضايا المسموح بها",
+        description: "يرجى ملء الاسم ورقم الهاتف على الأقل",
         variant: "destructive",
       });
       return;
     }
 
     try {
-      // Convert local lawyer data to Supabase format using correct column names
-      const supabaseLawyer = {
-        name: newLawyer.name,
-        phone: newLawyer.phone,
-        mobile: newLawyer.phone, // Use phone as mobile for now
-        governorate: newLawyer.governorate,
-        gender: 'male', // Default value
-        subscription_amount: 0,
-        send_method: 'whatsapp',
-        total_cases: newLawyer.maxCases,
-        consumed_cases: newLawyer.takenCases,
-        remaining_cases: Math.max(0, newLawyer.maxCases - newLawyer.takenCases),
-        available_cases: Math.max(0, newLawyer.maxCases - newLawyer.takenCases),
-        price_per_case: newLawyer.pricePerCase,
-        revenue: newLawyer.takenCases * newLawyer.pricePerCase,
+      const lawyerData = {
+        name: newLawyer.name!,
+        mobile: newLawyer.phone!,
+        governorate: newLawyer.governorate || 'غير محدد',
+        gender: newLawyer.gender || 'ذكر',
+        subscription_amount: newLawyer.pricePerCase || 150,
+        send_method: 'واتس',
+        total_cases: newLawyer.maxCases || 10,
+        consumed_cases: newLawyer.takenCases || 0,
+        remaining_cases: (newLawyer.maxCases || 10) - (newLawyer.takenCases || 0),
+        available_cases: (newLawyer.maxCases || 10) - (newLawyer.takenCases || 0),
+        price_per_case: newLawyer.pricePerCase || 150,
+        revenue: newLawyer.revenue || 0,
         participated: newLawyer.status === 'active',
-        subscribed: newLawyer.isSubscribed,
+        subscribed: newLawyer.isSubscribed || false,
+        is_subscribed: newLawyer.isSubscribed || false,
         received_free_case: newLawyer.hasFreeCaseUsed || false,
-        is_subscribed: newLawyer.isSubscribed,
-        // Legacy fields for backward compatibility
-        cases: newLawyer.takenCases,
-        maxcases: newLawyer.maxCases,
-        availablecases: Math.max(0, newLawyer.maxCases - newLawyer.takenCases),
-        pricepercase: newLawyer.pricePerCase,
-        receivedfreecase: newLawyer.hasFreeCaseUsed || false,
-        receivedFreeCase: newLawyer.hasFreeCaseUsed || false // For backward compatibility
+        subscription_date: new Date().toISOString().split('T')[0]
       };
 
-      const createdLawyer = await lawyersService.create(supabaseLawyer);
+      const savedLawyer = await lawyersService.create(lawyerData);
       
-      // Convert back to local format and add to state using correct column names
       const localLawyer: Lawyer = {
-        id: createdLawyer.id,
-        name: createdLawyer.name,
-        phone: createdLawyer.phone || createdLawyer.mobile || '',
-        mobile: createdLawyer.mobile,
-        governorate: createdLawyer.governorate,
-        gender: createdLawyer.gender,
-        status: createdLawyer.participated ? 'active' : 'inactive',
-        // Use database column names directly
-        total_cases: createdLawyer.total_cases,
-        consumed_cases: createdLawyer.consumed_cases,
-        remaining_cases: createdLawyer.remaining_cases,
-        available_cases: createdLawyer.available_cases,
-        price_per_case: createdLawyer.price_per_case,
-        subscription_amount: createdLawyer.subscription_amount,
-        send_method: createdLawyer.send_method,
-        received_free_case: createdLawyer.received_free_case,
-        is_subscribed: createdLawyer.is_subscribed,
-        // Legacy fields for backward compatibility
-        maxCases: createdLawyer.total_cases || newLawyer.maxCases,
-        availableCases: createdLawyer.available_cases || Math.max(0, newLawyer.maxCases - (createdLawyer.consumed_cases || 0)),
-        takenCases: createdLawyer.consumed_cases || 0,
-        pricePerCase: createdLawyer.price_per_case || newLawyer.pricePerCase,
-        revenue: createdLawyer.revenue || 0,
-        isSubscribed: createdLawyer.subscribed,
-        hasFreeCaseUsed: (createdLawyer as any).receivedfreecase || false,
-        notes: newLawyer.notes,
-        campaignId: newLawyer.campaignId === 'none' ? undefined : newLawyer.campaignId
+        id: savedLawyer.id,
+        name: savedLawyer.name,
+        phone: savedLawyer.mobile,
+        mobile: savedLawyer.mobile,
+        governorate: savedLawyer.governorate,
+        gender: savedLawyer.gender,
+        status: savedLawyer.participated ? 'active' : 'inactive',
+        maxCases: savedLawyer.total_cases,
+        availableCases: savedLawyer.available_cases,
+        takenCases: savedLawyer.consumed_cases,
+        pricePerCase: savedLawyer.price_per_case,
+        revenue: savedLawyer.revenue,
+        isSubscribed: savedLawyer.is_subscribed,
+        hasFreeCaseUsed: savedLawyer.received_free_case,
+        subscription_date: savedLawyer.subscription_date,
+        notes: newLawyer.notes || ''
       };
 
       setLawyers([...lawyers, localLawyer]);
-      setNewLawyer({
-        name: "",
-        phone: "",
-        governorate: "",
-        campaignId: "",
-        status: "active",
-        maxCases: 10,
-        availableCases: 0,
-        takenCases: 0,
-        pricePerCase: 0,
-        isSubscribed: false,
-        hasFreeCaseUsed: false,
-        notes: ""
-      });
-      setIsAddDialogOpen(false);
       
       toast({
         title: "تم بنجاح",
         description: "تم إضافة المحامي بنجاح",
       });
-      
-      if (onDataChange) onDataChange();
-     } catch (error) {
-       console.error('Error adding lawyer:', error);
-       toast({
-         title: "خطأ",
-         description: "حدث خطأ في إضافة المحامي",
-         variant: "destructive",
-       });
-     }
-   };
-
-  const deleteLawyer = (id: string) => {
-    // Check if lawyer has taken cases
-    const lawyer = lawyers.find(l => l.id === id);
-    if (lawyer && lawyer.takenCases && lawyer.takenCases > 0) {
+    } catch (error) {
+      console.error('Error adding lawyer:', error);
       toast({
-        title: "لا يمكن الحذف",
-        description: `المحامي لديه ${lawyer.takenCases} قضية مأخوذة`,
+        title: "خطأ",
+        description: "حدث خطأ في إضافة المحامي",
         variant: "destructive",
       });
       return;
     }
 
-    setLawyers(lawyers.filter(lawyer => lawyer.id !== id));
-    toast({
-      title: "تم الحذف",
-      description: "تم حذف المحامي بنجاح",
+    setNewLawyer({
+      name: "",
+      phone: "",
+      governorate: "غير محدد",
+      gender: "ذكر",
+      status: "active",
+      maxCases: 10,
+      availableCases: 10,
+      takenCases: 0,
+      pricePerCase: 150,
+      revenue: 0,
+      isSubscribed: false,
+      hasFreeCaseUsed: false,
+      notes: ""
     });
+    setIsAddDialogOpen(false);
   };
 
-  const toggleSubscription = (id: string) => {
-    // فتح dialog الاشتراك
-    setSelectedLawyerId(id);
-    setSubscriptionDialogOpen(true);
+  const editLawyer = (lawyer: Lawyer) => {
+    setEditingLawyer(lawyer);
+    setIsEditDialogOpen(true);
   };
 
-  const createSubscription = async () => {
-    const lawyer = lawyers.find(l => l.id === selectedLawyerId);
-    if (!lawyer) return;
-
-    const totalAmount = subscriptionCases * subscriptionPrice;
-    const subscriptionDateISO = new Date(subscriptionDate + 'T00:00:00').toISOString();
-    
-    try {
-      // تحديث بيانات المحامي في قاعدة البيانات
-      const updatedLawyer = await lawyersService.update(selectedLawyerId, {
-        subscribed: true,
-        subscription_date: subscriptionDateISO,
-        cases: subscriptionCases,
-        maxcases: subscriptionCases,
-        availablecases: subscriptionCases,
-        pricepercase: subscriptionPrice,
-        revenue: totalAmount
-      });
-      
-      // إضافة المصروف إلى قائمة المصروفات
-      const newExpense: Expense = {
-        id: Date.now().toString(),
-        title: `اشتراك المحامي ${lawyer.name}`,
-        amount: totalAmount,
-        category: "طلبات المحامين",
-        date: new Date().toISOString().split('T')[0],
-        description: `اشتراك ${subscriptionCases} قضايا بسعر ${subscriptionPrice} ج.م للقضية الواحدة - تاريخ الاشتراك: ${new Date(subscriptionDateISO).toLocaleDateString('ar-EG')}`,
-        type: "lawyer_orders"
-      };
-      
-      setExpenses([...expenses, newExpense]);
-      
-      // تحديث بيانات المحامي محلياً
-      setLawyers(lawyers.map(l => 
-        l.id === selectedLawyerId 
-          ? { ...l, isSubscribed: true, subscription_date: subscriptionDateISO, revenue: totalAmount, availableCases: subscriptionCases, pricePerCase: subscriptionPrice }
-          : l
-      ));
-      
-      toast({
-        title: "تم الاشتراك",
-        description: `تم اشتراك المحامي ${lawyer.name} بـ ${subscriptionCases} قضايا بمبلغ ${totalAmount.toLocaleString('ar-EG')} جنيه في ${new Date(subscriptionDateISO).toLocaleDateString('ar-EG')}`,
-      });
-      
-      setSubscriptionDialogOpen(false);
-      setSubscriptionCases(1);
-      setSubscriptionPrice(0);
-      setSubscriptionDate(new Date().toISOString().split('T')[0]);
-      setSelectedLawyerId("");
-      
-      if (onDataChange) onDataChange();
-    } catch (error) {
-      console.error('Error updating subscription:', error);
+  const updateLawyer = async () => {
+    if (!editingLawyer?.name || !editingLawyer?.phone) {
       toast({
         title: "خطأ",
-        description: "حدث خطأ في تحديث الاشتراك",
-        variant: "destructive",
-      });
-    }
-  };
-
-  // دالة أخذ قضية مع تاريخ مخصص
-  const takeCaseWithCustomDate = async () => {
-    if (!selectedLawyerForCase || !customCaseDate) {
-      toast({
-        title: "خطأ",
-        description: "يرجى تحديد المحامي والتاريخ",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    const lawyer = lawyers.find(l => l.id === selectedLawyerForCase);
-    if (!lawyer) {
-      toast({
-        title: "خطأ",
-        description: "المحامي غير موجود",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    if (lawyer.availableCases <= 0) {
-      toast({
-        title: "خطأ",
-        description: "لا توجد قضايا متاحة لهذا المحامي",
+        description: "يرجى ملء الاسم ورقم الهاتف على الأقل",
         variant: "destructive",
       });
       return;
     }
 
     try {
-      const newAvailableCases = lawyer.availableCases - 1;
-      const newTakenCases = lawyer.takenCases + 1;
-      
-      // تحديث بيانات المحامي في قاعدة البيانات
-       await lawyersService.update(selectedLawyerForCase, {
-         cases: newTakenCases,
-         availablecases: newAvailableCases,
-         lastCaseDate: customCaseDate
-       });
-
-      setLawyers(lawyers.map(l => 
-        l.id === selectedLawyerForCase 
-          ? { ...l, availableCases: newAvailableCases, takenCases: newTakenCases, lastCaseDate: customCaseDate }
-          : l
-      ));
-      
-      toast({
-        title: "تم أخذ قضية",
-        description: `تم أخذ قضية من ${lawyer.name} بتاريخ ${new Date(customCaseDate).toLocaleDateString('ar-EG')}. القضايا المتبقية: ${newAvailableCases}`,
-      });
-      
-      // إغلاق الحوار وإعادة تعيين القيم
-      setTakeCaseDialogOpen(false);
-      setSelectedLawyerForCase("");
-      setCustomCaseDate(new Date().toISOString().split('T')[0]);
-      
-      if (onDataChange) onDataChange();
-    } catch (error) {
-      console.error('Error taking case with custom date:', error);
-      toast({
-        title: "خطأ",
-        description: "حدث خطأ في أخذ القضية",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const takeCase = async (id: string) => {
-    const lawyer = lawyers.find(l => l.id === id);
-    if (!lawyer || !lawyer.isSubscribed || lawyer.availableCases <= 0) {
-      toast({
-        title: "لا يمكن أخذ قضية",
-        description: lawyer?.isSubscribed ? "لا توجد قضايا متاحة" : "المحامي غير مشترك",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    try {
-      const newAvailableCases = lawyer.availableCases - 1;
-      const newTakenCases = (lawyer.takenCases || 0) + 1;
-      const caseDate = new Date().toISOString().split('T')[0];
-      
-      // تحديث بيانات المحامي في قاعدة البيانات
-         await lawyersService.update(id, {
-           cases: newAvailableCases,
-           lastCaseDate: caseDate
-         });
-
-      setLawyers(lawyers.map(l => 
-        l.id === id 
-          ? { ...l, availableCases: newAvailableCases, takenCases: newTakenCases, lastCaseDate: caseDate }
-          : l
-      ));
-      
-      toast({
-         title: "تم أخذ قضية",
-         description: `تم أخذ قضية من ${lawyer.name} بتاريخ ${new Date().toLocaleDateString('ar-EG')}. القضايا المتبقية: ${newAvailableCases}`,
-       });
-       
-      if (onDataChange) onDataChange();
-    } catch (error) {
-      console.error('Error taking case:', error);
-      toast({
-        title: "خطأ",
-        description: "حدث خطأ في أخذ القضية",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const [orderDialogOpen, setOrderDialogOpen] = useState(false);
-  const [subscriptionDialogOpen, setSubscriptionDialogOpen] = useState(false);
-  const [editDialogOpen, setEditDialogOpen] = useState(false);
-  const [selectedLawyerId, setSelectedLawyerId] = useState<string>("");
-  const [editingLawyer, setEditingLawyer] = useState<Lawyer | null>(null);
-  const [orderCases, setOrderCases] = useState(1);
-  const [subscriptionCases, setSubscriptionCases] = useState(1);
-  const [subscriptionPrice, setSubscriptionPrice] = useState(0);
-  const [subscriptionDate, setSubscriptionDate] = useState(new Date().toISOString().split('T')[0]);
-
-  const createOrder = async () => {
-    const lawyer = lawyers.find(l => l.id === selectedLawyerId);
-    if (!lawyer) return;
-
-    const totalAmount = orderCases * lawyer.pricePerCase;
-    const reorderDate = orderDate ? new Date(orderDate).toISOString() : new Date().toISOString();
-    
-    try {
-      // تحديث بيانات المحامي في قاعدة البيانات
-      const updatedLawyer = await lawyersService.update(selectedLawyerId, {
-        reorder_date: reorderDate
-      });
-      
-      // إضافة المصروف إلى قائمة المصروفات
-      const newExpense: Expense = {
-        id: Date.now().toString(),
-        title: `طلب قضايا للمحامي ${lawyer.name}`,
-        amount: totalAmount,
-        category: "طلبات المحامين",
-        date: orderDate || new Date().toISOString().split('T')[0],
-        description: `طلب ${orderCases} قضايا بسعر ${lawyer.pricePerCase} ج.م للقضية الواحدة - تاريخ إعادة الطلب: ${new Date(reorderDate).toLocaleDateString('ar-EG')}`,
-        type: "lawyer_orders"
-      };
-      
-      setExpenses([...expenses, newExpense]);
-      
-      // تحديث القضايا المتاحة للمحامي محلياً
-      setLawyers(lawyers.map(l => 
-        l.id === selectedLawyerId 
-          ? { ...l, availableCases: l.availableCases + orderCases, reorder_date: reorderDate }
-          : l
-      ));
-      
-      toast({
-        title: "تم إنشاء الطلب",
-        description: `طلب ${orderCases} قضايا للمحامي ${lawyer.name} بمبلغ ${totalAmount.toLocaleString('ar-EG')} جنيه في ${new Date(reorderDate).toLocaleDateString('ar-EG')}`,
-      });
-      
-      setOrderDialogOpen(false);
-      setOrderCases(1);
-      setSelectedLawyerId("");
-      
-      if (onDataChange) onDataChange();
-    } catch (error) {
-      console.error('Error updating reorder:', error);
-      toast({
-        title: "خطأ",
-        description: "حدث خطأ في إنشاء الطلب",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const openEditDialog = (lawyer: Lawyer) => {
-    setEditingLawyer({ ...lawyer });
-    setEditDialogOpen(true);
-  };
-
-  const saveEditedLawyer = async () => {
-    if (!editingLawyer) return;
-
-    try {
-      // تحديث بيانات المحامي في قاعدة البيانات
-      await lawyersService.update(editingLawyer.id, {
+      const updateData = {
         name: editingLawyer.name,
-        phone: editingLawyer.phone,
-        governorate: editingLawyer.governorate,
-        cases: editingLawyer.takenCases || 0,
-        maxcases: editingLawyer.maxCases || 0,
-        availablecases: editingLawyer.availableCases || 0,
-        pricepercase: editingLawyer.pricePerCase || 0,
-        revenue: (editingLawyer.takenCases || 0) * (editingLawyer.pricePerCase || 0),
+        mobile: editingLawyer.phone,
+        governorate: editingLawyer.governorate || 'غير محدد',
+        gender: editingLawyer.gender || 'ذكر',
+        subscription_amount: editingLawyer.pricePerCase || 150,
+        total_cases: editingLawyer.maxCases || 10,
+        consumed_cases: editingLawyer.takenCases || 0,
+        remaining_cases: (editingLawyer.maxCases || 10) - (editingLawyer.takenCases || 0),
+        available_cases: (editingLawyer.maxCases || 10) - (editingLawyer.takenCases || 0),
+        price_per_case: editingLawyer.pricePerCase || 150,
+        revenue: editingLawyer.revenue || 0,
         participated: editingLawyer.status === 'active',
-        subscribed: editingLawyer.isSubscribed,
-        receivedfreecase: editingLawyer.hasFreeCaseUsed || false,
-        receivedFreeCase: editingLawyer.hasFreeCaseUsed || false
-      });
-
-      const updatedLawyer = {
-        ...editingLawyer,
-        revenue: (editingLawyer.takenCases || 0) * (editingLawyer.pricePerCase || 0)
+        subscribed: editingLawyer.isSubscribed || false,
+        is_subscribed: editingLawyer.isSubscribed || false,
+        received_free_case: editingLawyer.hasFreeCaseUsed || false
       };
-      
-      setLawyers(lawyers.map(l => 
-        l.id === editingLawyer.id ? updatedLawyer : l
-      ));
+
+      await lawyersService.update(editingLawyer.id, updateData);
+
+      const updatedLawyers = lawyers.map(lawyer => 
+        lawyer.id === editingLawyer.id ? editingLawyer : lawyer
+      );
+      setLawyers(updatedLawyers);
       
       toast({
-        title: "تم التحديث",
-        description: "تم تحديث بيانات المحامي وحفظها في قاعدة البيانات",
+        title: "تم بنجاح",
+        description: "تم تحديث بيانات المحامي بنجاح",
       });
-      
-      setEditDialogOpen(false);
-      setEditingLawyer(null);
-      
-      if (onDataChange) onDataChange();
     } catch (error) {
       console.error('Error updating lawyer:', error);
       toast({
@@ -468,146 +234,176 @@ export function LawyersTab({ lawyers, setLawyers, expenses, setExpenses, campaig
         description: "حدث خطأ في تحديث بيانات المحامي",
         variant: "destructive",
       });
+      return;
     }
+
+    setEditingLawyer(null);
+    setIsEditDialogOpen(false);
   };
 
-  const cancelSubscription = async () => {
-    if (!editingLawyer) return;
-
+  const deleteLawyer = async (lawyerId: string) => {
     try {
-      // تحديث بيانات المحامي في قاعدة البيانات
-      await lawyersService.update(editingLawyer.id, {
-        subscribed: false,
-        cases: 0,
-        maxcases: 0,
-        availablecases: 0,
-        pricepercase: 0,
-        revenue: 0
-      });
-
-      const updatedLawyer = {
-        ...editingLawyer,
-        isSubscribed: false,
-        availableCases: 0,
-        takenCases: 0,
-        pricePerCase: 0
-      };
-
-      // تحديث قائمة المحامين الأساسية
-      setLawyers(lawyers.map(l => 
-        l.id === editingLawyer.id ? updatedLawyer : l
-      ));
-      
-      setEditingLawyer(updatedLawyer);
+      await lawyersService.delete(lawyerId);
+      const updatedLawyers = lawyers.filter(lawyer => lawyer.id !== lawyerId);
+      setLawyers(updatedLawyers);
       
       toast({
-        title: "تم إلغاء الاشتراك",
-        description: "تم إلغاء اشتراك المحامي وحفظ التغييرات في قاعدة البيانات",
+        title: "تم بنجاح",
+        description: "تم حذف المحامي بنجاح",
       });
-      
-      if (onDataChange) onDataChange();
     } catch (error) {
-      console.error('Error canceling subscription:', error);
+      console.error('Error deleting lawyer:', error);
       toast({
         title: "خطأ",
-        description: "حدث خطأ في إلغاء الاشتراك",
+        description: "حدث خطأ في حذف المحامي",
         variant: "destructive",
       });
     }
   };
 
-  const activateSubscription = async () => {
-    if (!editingLawyer) return;
+  const handleReorder = (lawyer: Lawyer) => {
+    setReorderingLawyer(lawyer);
+    setReorderCases(1);
+    setIsReorderDialogOpen(true);
+  };
 
-    try {
-      const currentCases = editingLawyer.availableCases || 0;
-      const newTotalCases = currentCases + subscriptionCases;
-      const currentRevenue = editingLawyer.revenue || 0;
-      const additionalRevenue = subscriptionCases * subscriptionPrice;
-      const totalRevenue = currentRevenue + additionalRevenue;
-      
-      // تحديث بيانات المحامي في قاعدة البيانات
-      await lawyersService.update(editingLawyer.id, {
-        subscribed: true,
-        cases: newTotalCases,
-        maxcases: newTotalCases,
-        availablecases: newTotalCases,
-        pricepercase: subscriptionPrice,
-        revenue: totalRevenue
-      });
-
-      const updatedLawyer = {
-        ...editingLawyer,
-        isSubscribed: true,
-        availableCases: newTotalCases,
-        pricePerCase: subscriptionPrice,
-        revenue: totalRevenue
-      };
-
-      // تحديث قائمة المحامين الأساسية
-      setLawyers(lawyers.map(l => 
-        l.id === editingLawyer.id ? updatedLawyer : l
-      ));
-      
-      setEditingLawyer(updatedLawyer);
-      
-      toast({
-        title: "تم تفعيل الاشتراك",
-        description: `تم إضافة ${subscriptionCases} قضايا جديدة. إجمالي القضايا المتاحة: ${newTotalCases}`,
-      });
-      
-      if (onDataChange) onDataChange();
-    } catch (error) {
-      console.error('Error activating subscription:', error);
+  const processReorder = async () => {
+    if (!reorderingLawyer || reorderCases <= 0) {
       toast({
         title: "خطأ",
-        description: "حدث خطأ في تفعيل الاشتراك",
+        description: "يرجى إدخال عدد صحيح من القضايا",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      // حساب القيم الجديدة
+      const newTotalCases = (reorderingLawyer.maxCases || 0) + reorderCases;
+      const newAvailableCases = (reorderingLawyer.availableCases || 0) + reorderCases;
+      const additionalRevenue = reorderCases * (reorderingLawyer.pricePerCase || 0);
+      const newRevenue = (reorderingLawyer.revenue || 0) + additionalRevenue;
+      const newReorders = (reorderingLawyer.reorders || 0) + 1;
+
+      // تحديث البيانات في قاعدة البيانات
+      const updateData = {
+        total_cases: newTotalCases,
+        available_cases: newAvailableCases,
+        remaining_cases: newAvailableCases,
+        revenue: newRevenue,
+        reorders: newReorders,
+        reorder_date: new Date().toISOString().split('T')[0]
+      };
+
+      await lawyersService.update(reorderingLawyer.id, updateData);
+
+      // تحديث البيانات المحلية
+      const updatedLawyers = lawyers.map(lawyer => {
+        if (lawyer.id === reorderingLawyer.id) {
+          return {
+            ...lawyer,
+            maxCases: newTotalCases,
+            availableCases: newAvailableCases,
+            revenue: newRevenue,
+            reorders: newReorders,
+            reorder_date: new Date().toISOString().split('T')[0]
+          };
+        }
+        return lawyer;
+      });
+
+      setLawyers(updatedLawyers);
+
+      // إضافة مصروف إعادة الطلب
+      const reorderExpense: Expense = {
+        id: Date.now().toString(),
+        title: `إعادة طلب - ${reorderingLawyer.name}`,
+        amount: additionalRevenue,
+        category: 'طلبات المحامين',
+        date: new Date().toISOString().split('T')[0],
+        description: `إعادة طلب ${reorderCases} قضية للمحامي ${reorderingLawyer.name}`,
+        type: 'lawyer_orders'
+      };
+
+      setExpenses([...expenses, reorderExpense]);
+
+      toast({
+        title: "تم بنجاح",
+        description: `تم إضافة ${reorderCases} قضية للمحامي ${reorderingLawyer.name} وتحديث الإيرادات بمبلغ ${additionalRevenue} جنيه`,
+      });
+
+      setIsReorderDialogOpen(false);
+      setReorderingLawyer(null);
+      setReorderCases(1);
+
+    } catch (error) {
+      console.error('Error processing reorder:', error);
+      toast({
+        title: "خطأ",
+        description: "حدث خطأ في معالجة إعادة الطلب",
         variant: "destructive",
       });
     }
   };
 
-  const addReorder = async () => {
-    if (!editingLawyer) return;
-
-    try {
-      const newReorders = (editingLawyer.reorders || 0) + 1;
-      
-      // تحديث بيانات المحامي في قاعدة البيانات
-      await lawyersService.update(editingLawyer.id, {
-        reorders: newReorders
-      });
-
-      const updatedLawyer = {
-        ...editingLawyer,
-        reorders: newReorders
-      };
-
-      setLawyers(lawyers.map(l => 
-        l.id === editingLawyer.id ? updatedLawyer : l
-      ));
-      
-      setEditingLawyer(updatedLawyer);
-      
-      toast({
-        title: "تم إضافة إعادة طلب",
-        description: "تم إضافة إعادة طلب للمحامي وحفظ التغييرات في قاعدة البيانات",
-      });
-      
-      if (onDataChange) onDataChange();
-    } catch (error) {
-      console.error('Error adding reorder:', error);
-      toast({
-        title: "خطأ",
-        description: "حدث خطأ في إضافة إعادة الطلب",
-        variant: "destructive",
-      });
-    }
+  const exportData = () => {
+    const dataStr = JSON.stringify(lawyers, null, 2);
+    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+    const exportFileDefaultName = 'lawyers-data.json';
+    const linkElement = document.createElement('a');
+    linkElement.setAttribute('href', dataUri);
+    linkElement.setAttribute('download', exportFileDefaultName);
+    linkElement.click();
   };
 
+  const importData = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
 
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const importedData = JSON.parse(e.target?.result as string);
+        if (Array.isArray(importedData)) {
+          setLawyers(importedData);
+          toast({
+            title: "تم بنجاح",
+            description: `تم استيراد ${importedData.length} محامي`,
+          });
+        }
+      } catch (error) {
+        toast({
+          title: "خطأ",
+          description: "خطأ في قراءة الملف",
+          variant: "destructive",
+        });
+      }
+    };
+    reader.readAsText(file);
+  };
 
+  // إحصائيات محسّنة
+  const stats = useMemo(() => {
+    const totalLawyers = lawyers.length;
+    const activeLawyers = lawyers.filter(l => l.status === 'active').length;
+    const subscribedLawyers = lawyers.filter(l => l.isSubscribed).length;
+    const totalTakenCases = lawyers.reduce((sum, l) => sum + (l.takenCases || 0), 0);
+    const totalAvailableCases = lawyers.reduce((sum, l) => sum + (l.availableCases || 0), 0);
+    const totalRevenue = lawyers.reduce((sum, l) => sum + (l.revenue || 0), 0);
+    const freeCasesUsed = lawyers.filter(l => l.hasFreeCaseUsed).length;
+    const totalReorders = lawyers.reduce((sum, l) => sum + (l.reorders || 0), 0);
 
+    return {
+      totalLawyers,
+      activeLawyers,
+      subscribedLawyers,
+      totalTakenCases,
+      totalAvailableCases,
+      totalRevenue,
+      freeCasesUsed,
+      totalReorders
+    };
+  }, [lawyers]);
 
   return (
     <div dir="rtl" lang="ar" className="space-y-6 font-arabic">
@@ -615,242 +411,213 @@ export function LawyersTab({ lawyers, setLawyers, expenses, setExpenses, campaig
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h2 className="text-2xl font-bold">إدارة المحامين</h2>
-          <p className="text-muted-foreground">إدارة فريق المحامين والمستشارين</p>
+          <p className="text-muted-foreground">إدارة بيانات المحامين والسبونسر</p>
         </div>
-        <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-          <DialogTrigger asChild>
-            <Button className="bg-gradient-primary hover:opacity-90">
-              <Plus className="ml-2 h-4 w-4" />
-              إضافة محامي جديد
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="sm:max-w-[425px]">
-            <DialogHeader>
-              <DialogTitle>إضافة محامي جديد</DialogTitle>
-              <DialogDescription>
-                إضافة محامي أو مستشار جديد للفريق
-              </DialogDescription>
-            </DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="grid gap-2">
-                <Label htmlFor="name">اسم المحامي *</Label>
-                <Input
-                  id="name"
-                  value={newLawyer.name}
-                  onChange={(e) => setNewLawyer({ ...newLawyer, name: e.target.value })}
-                  placeholder="الاسم الكامل"
-                />
+        <div className="flex gap-2">
+          <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+            <DialogTrigger asChild>
+              <Button className="bg-gradient-primary hover:opacity-90">
+                <Plus className="ml-2 h-4 w-4" />
+                محامي جديد
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-[500px]">
+              <DialogHeader>
+                <DialogTitle>إضافة محامي جديد</DialogTitle>
+                <DialogDescription>إضافة محامي جديد إلى النظام</DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-4 py-4 max-h-[60vh] overflow-y-auto">
+                <div className="grid gap-2">
+                  <Label htmlFor="name">الاسم *</Label>
+                  <Input
+                    id="name"
+                    value={newLawyer.name}
+                    onChange={(e) => setNewLawyer({ ...newLawyer, name: e.target.value })}
+                    placeholder="اسم المحامي"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="phone">رقم الهاتف *</Label>
+                  <Input
+                    id="phone"
+                    value={newLawyer.phone}
+                    onChange={(e) => setNewLawyer({ ...newLawyer, phone: e.target.value })}
+                    placeholder="+20 1XX XXX XXXX"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="governorate">المحافظة</Label>
+                    <Input
+                      id="governorate"
+                      value={newLawyer.governorate}
+                      onChange={(e) => setNewLawyer({ ...newLawyer, governorate: e.target.value })}
+                      placeholder="المحافظة"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="gender">النوع</Label>
+                    <Select value={newLawyer.gender} onValueChange={(value) => setNewLawyer({ ...newLawyer, gender: value })}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="ذكر">ذكر</SelectItem>
+                        <SelectItem value="انثى">انثى</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="maxCases">عدد القضايا</Label>
+                    <Input
+                      id="maxCases"
+                      type="number"
+                      value={newLawyer.maxCases}
+                      onChange={(e) => setNewLawyer({ ...newLawyer, maxCases: parseInt(e.target.value) || 0 })}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="pricePerCase">سعر القضية</Label>
+                    <Input
+                      id="pricePerCase"
+                      type="number"
+                      value={newLawyer.pricePerCase}
+                      onChange={(e) => setNewLawyer({ ...newLawyer, pricePerCase: parseFloat(e.target.value) || 0 })}
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="notes">ملاحظات</Label>
+                  <Textarea
+                    id="notes"
+                    value={newLawyer.notes}
+                    onChange={(e) => setNewLawyer({ ...newLawyer, notes: e.target.value })}
+                    placeholder="ملاحظات إضافية"
+                  />
+                </div>
               </div>
-              <div className="grid gap-2">
-                <Label htmlFor="phone">رقم الهاتف *</Label>
-                <Input
-                  id="phone"
-                  value={newLawyer.phone}
-                  onChange={(e) => setNewLawyer({ ...newLawyer, phone: e.target.value })}
-                  placeholder="رقم الهاتف"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="governorate">المحافظة</Label>
-                <Select
-                  value={newLawyer.governorate}
-                  onValueChange={(value) => setNewLawyer({ ...newLawyer, governorate: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="اختر المحافظة" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="القاهرة">القاهرة</SelectItem>
-                    <SelectItem value="الجيزة">الجيزة</SelectItem>
-                    <SelectItem value="الإسكندرية">الإسكندرية</SelectItem>
-                    <SelectItem value="الدقهلية">الدقهلية</SelectItem>
-                    <SelectItem value="الشرقية">الشرقية</SelectItem>
-                    <SelectItem value="القليوبية">القليوبية</SelectItem>
-                    <SelectItem value="كفر الشيخ">كفر الشيخ</SelectItem>
-                    <SelectItem value="الغربية">الغربية</SelectItem>
-                    <SelectItem value="المنوفية">المنوفية</SelectItem>
-                    <SelectItem value="البحيرة">البحيرة</SelectItem>
-                    <SelectItem value="الإسماعيلية">الإسماعيلية</SelectItem>
-                    <SelectItem value="بورسعيد">بورسعيد</SelectItem>
-                    <SelectItem value="السويس">السويس</SelectItem>
-                    <SelectItem value="المنيا">المنيا</SelectItem>
-                    <SelectItem value="بني سويف">بني سويف</SelectItem>
-                    <SelectItem value="الفيوم">الفيوم</SelectItem>
-                    <SelectItem value="أسيوط">أسيوط</SelectItem>
-                    <SelectItem value="سوهاج">سوهاج</SelectItem>
-                    <SelectItem value="قنا">قنا</SelectItem>
-                    <SelectItem value="أسوان">أسوان</SelectItem>
-                    <SelectItem value="الأقصر">الأقصر</SelectItem>
-                    <SelectItem value="البحر الأحمر">البحر الأحمر</SelectItem>
-                    <SelectItem value="الوادي الجديد">الوادي الجديد</SelectItem>
-                    <SelectItem value="مطروح">مطروح</SelectItem>
-                    <SelectItem value="شمال سيناء">شمال سيناء</SelectItem>
-                    <SelectItem value="جنوب سيناء">جنوب سيناء</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="campaignId">الحملة التسويقية</Label>
-                <Select
-                  value={newLawyer.campaignId}
-                  onValueChange={(value) => setNewLawyer({ ...newLawyer, campaignId: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="اختر الحملة التسويقية" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">بدون حملة</SelectItem>
-                    {campaigns.map((campaign) => (
-                      <SelectItem key={campaign.id} value={campaign.id}>
-                        {campaign.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="maxCases">عدد القضايا المسموح بها *</Label>
-                <Input
-                  id="maxCases"
-                  type="number"
-                  min="1"
-                  value={newLawyer.maxCases}
-                  onChange={(e) => setNewLawyer({ ...newLawyer, maxCases: parseInt(e.target.value) || 10 })}
-                  placeholder="عدد القضايا التي يمكن للمحامي التعامل معها"
-                />
-              </div>
+              <DialogFooter>
+                <Button onClick={addLawyer}>إضافة المحامي</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
 
-              <div className="grid gap-2">
-                <Label htmlFor="status">الحالة</Label>
-                <Select
-                  value={newLawyer.status}
-                  onValueChange={(value: "active" | "inactive") => setNewLawyer({ ...newLawyer, status: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="active">نشط</SelectItem>
-                    <SelectItem value="inactive">غير نشط</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="notes">ملاحظات</Label>
-                <Textarea
-                  id="notes"
-                  value={newLawyer.notes}
-                  onChange={(e) => setNewLawyer({ ...newLawyer, notes: e.target.value })}
-                  placeholder="ملاحظات إضافية"
-                />
-              </div>
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="hasFreeCaseUsed"
-                  checked={newLawyer.hasFreeCaseUsed}
-                  onCheckedChange={(checked) => setNewLawyer({ ...newLawyer, hasFreeCaseUsed: !!checked })}
-                />
-                <Label htmlFor="hasFreeCaseUsed">استخدم القضية المجانية</Label>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button onClick={addLawyer}>إضافة المحامي</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </div>
+          <Button variant="outline" onClick={exportData}>
+            <Download className="ml-2 h-4 w-4" />
+            تصدير
+          </Button>
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
-        <Input
-          placeholder="البحث برقم المحامي..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="pl-10"
-          type="number"
-        />
+          <Button variant="outline" asChild>
+            <label className="cursor-pointer">
+              <Upload className="ml-2 h-4 w-4" />
+              استيراد
+              <input
+                type="file"
+                accept=".json"
+                onChange={importData}
+                className="hidden"
+              />
+            </label>
+          </Button>
+        </div>
       </div>
 
       {/* Statistics Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
+        <Card className="bg-gradient-primary text-primary-foreground">
+          <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">إجمالي المحامين</CardTitle>
-            <Scale className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-primary">{lawyers.length}</div>
+            <div className="text-2xl font-bold">{stats.totalLawyers}</div>
           </CardContent>
         </Card>
+
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">المحامون النشطون</CardTitle>
-            <Scale className="h-4 w-4 text-muted-foreground" />
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">النشطون</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-success">
-              {lawyers.filter(l => l.status === 'active').length}
-            </div>
+            <div className="text-2xl font-bold text-success">{stats.activeLawyers}</div>
           </CardContent>
         </Card>
+
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">القضايا النشطة</CardTitle>
-            <Scale className="h-4 w-4 text-muted-foreground" />
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">المشتركون</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-info">
-              {lawyers.reduce((sum, lawyer) => sum + (lawyer.takenCases || 0), 0)}
-            </div>
+            <div className="text-2xl font-bold text-info">{stats.subscribedLawyers}</div>
           </CardContent>
         </Card>
+
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">القضايا المأخوذة</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-warning">{stats.totalTakenCases}</div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">القضايا المتاحة</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-accent">{stats.totalAvailableCases}</div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">إجمالي الإيرادات</CardTitle>
-            <Scale className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-warning">
-              {lawyers.reduce((total, lawyer) => {
-                return total + (lawyer.revenue || 0);
-              }, 0).toLocaleString('ar-EG')} ج.م
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              من {lawyers.reduce((total, lawyer) => total + (lawyer.takenCases || 0), 0)} قضية
-            </p>
+            <div className="text-xl font-bold text-success">{stats.totalRevenue.toLocaleString('ar-EG')} ج.م</div>
           </CardContent>
         </Card>
+
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">المشتركون مؤخراً</CardTitle>
-            <Scale className="h-4 w-4 text-muted-foreground" />
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">القضايا المجانية</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-600">
-              {lawyers.filter(l => l.isSubscribed && l.subscription_date).length}
-            </div>
-            <div className="text-xs text-muted-foreground mt-1 space-y-1">
-              {lawyers
-                .filter(l => l.isSubscribed && l.subscription_date)
-                .sort((a, b) => new Date(b.subscription_date!).getTime() - new Date(a.subscription_date!).getTime())
-                .slice(0, 2)
-                .map(lawyer => (
-                  <div key={lawyer.id} className="flex justify-between">
-                    <span className="truncate max-w-[80px]">{lawyer.name}</span>
-                    <span>{new Date(lawyer.subscription_date!).toLocaleDateString('ar-EG', { month: 'short', day: 'numeric' })}</span>
-                  </div>
-                ))}
-            </div>
+            <div className="text-2xl font-bold text-destructive">{stats.freeCasesUsed}</div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">إعادة الطلبات</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-primary">{stats.totalReorders}</div>
           </CardContent>
         </Card>
       </div>
+
+      {/* Search and Filter */}
+      <SearchAndFilter
+        searchTerm={searchTerm}
+        onSearchChange={setSearchTerm}
+        filters={filters}
+        onFilterChange={updateFilter}
+        onClearFilters={clearFilters}
+        filterOptions={filterOptions}
+        placeholder="البحث في المحامين..."
+        hasActiveFilters={hasActiveFilters}
+        resultCount={resultCount}
+        totalCount={totalCount}
+      />
 
       {/* Lawyers Table */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Scale className="h-5 w-5" />
+            <Users className="h-5 w-5" />
             قائمة المحامين ({filteredLawyers.length})
           </CardTitle>
         </CardHeader>
@@ -861,13 +628,13 @@ export function LawyersTab({ lawyers, setLawyers, expenses, setExpenses, campaig
                 <TableRow>
                   <TableHead>الاسم</TableHead>
                   <TableHead>الهاتف</TableHead>
+                  <TableHead>المحافظة</TableHead>
                   <TableHead>الحالة</TableHead>
-                  <TableHead>القضايا المتاحة</TableHead>
-                  <TableHead>القضايا المأخوذة</TableHead>
-                  <TableHead>الاشتراك</TableHead>
-                  <TableHead>تاريخ الاشتراك</TableHead>
-                  <TableHead>تاريخ إعادة الطلب</TableHead>
-                  <TableHead>الملاحظات</TableHead>
+                  <TableHead>القضايا</TableHead>
+                  <TableHead>المتاحة</TableHead>
+                  <TableHead>السعر</TableHead>
+                  <TableHead>الإيرادات</TableHead>
+                  <TableHead>إعادة الطلبات</TableHead>
                   <TableHead>الإجراءات</TableHead>
                 </TableRow>
               </TableHeader>
@@ -875,118 +642,84 @@ export function LawyersTab({ lawyers, setLawyers, expenses, setExpenses, campaig
                 {filteredLawyers.map((lawyer) => (
                   <TableRow key={lawyer.id} className="hover:bg-muted/50">
                     <TableCell className="font-medium">{lawyer.name}</TableCell>
-                    <TableCell className="flex items-center gap-2">
-                      <Phone className="h-4 w-4 text-muted-foreground" />
-                      {lawyer.phone}
-                    </TableCell>
                     <TableCell>
-                      <Badge variant={lawyer.status === 'active' ? 'default' : 'secondary'}>
-                        {lawyer.status === 'active' ? 'نشط' : 'غير نشط'}
-                      </Badge>
+                      <div className="flex items-center gap-2">
+                        <Phone className="h-4 w-4 text-muted-foreground" />
+                        {lawyer.phone}
+                      </div>
                     </TableCell>
+                    <TableCell>{lawyer.governorate}</TableCell>
                     <TableCell>
-                      <Badge variant="outline" className="bg-blue-50 text-blue-700">
-                        {lawyer.isSubscribed ? lawyer.availableCases : 0} قضية متاحة
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className="bg-green-50 text-green-700">
-                        {lawyer.takenCases || 0} قضية مأخوذة
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col gap-2">
-                        {lawyer.isSubscribed ? (
-                          <Badge variant="default" className="bg-green-600 text-white">
+                      <div className="flex items-center gap-2">
+                        <Badge variant={lawyer.status === 'active' ? 'default' : 'secondary'}>
+                          {lawyer.status === 'active' ? 'نشط' : 'غير نشط'}
+                        </Badge>
+                        {lawyer.isSubscribed && (
+                          <Badge variant="outline" className="bg-success/10 text-success border-success/20">
+                            <UserCheck className="h-3 w-3 mr-1" />
                             مشترك
                           </Badge>
-                        ) : (
-                          <Button
-                            size="sm"
-                            variant="default"
-                            onClick={() => toggleSubscription(lawyer.id)}
-                            className="w-20"
-                          >
-                            اشترك
-                          </Button>
+                        )}
+                        {lawyer.hasFreeCaseUsed && (
+                          <Badge variant="outline" className="bg-warning/10 text-warning border-warning/20">
+                            <Gift className="h-3 w-3 mr-1" />
+                            قضية مجانية
+                          </Badge>
                         )}
                       </div>
                     </TableCell>
                     <TableCell>
-                      {lawyer.subscription_date ? (
-                        <div className="flex flex-col">
-                          <span className="text-sm font-medium text-green-700">
-                            {new Date(lawyer.subscription_date).toLocaleDateString('ar-EG')}
-                          </span>
-                          <span className="text-xs text-muted-foreground">
-                            تاريخ الاشتراك
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-sm text-muted-foreground">لم يشترك بعد</span>
-                      )}
+                      <div className="text-center">
+                        <div className="font-bold">{lawyer.takenCases || 0}/{lawyer.maxCases || 0}</div>
+                        <div className="text-xs text-muted-foreground">مأخوذة/إجمالي</div>
+                      </div>
                     </TableCell>
                     <TableCell>
-                      {lawyer.reorder_date ? (
-                        <span className="text-sm text-muted-foreground">
-                          {new Date(lawyer.reorder_date).toLocaleDateString('ar-EG')}
-                        </span>
-                      ) : (
-                        <span className="text-sm text-muted-foreground">-</span>
-                      )}
+                      <Badge 
+                        variant={
+                          (lawyer.availableCases || 0) > 0 ? 'default' : 'secondary'
+                        }
+                        className={
+                          (lawyer.availableCases || 0) > 0 
+                            ? 'bg-success text-success-foreground' 
+                            : 'bg-muted text-muted-foreground'
+                        }
+                      >
+                        {lawyer.availableCases || 0}
+                      </Badge>
                     </TableCell>
-                    <TableCell className="max-w-[200px] truncate">
-                      {lawyer.notes || "لا توجد ملاحظات"}
+                    <TableCell>{(lawyer.pricePerCase || 0).toLocaleString('ar-EG')} ج.م</TableCell>
+                    <TableCell className="font-bold text-success">
+                      {(lawyer.revenue || 0).toLocaleString('ar-EG')} ج.م
                     </TableCell>
                     <TableCell>
-                      <div className="flex gap-2">
-                        {lawyer.isSubscribed && (
-                          <>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => takeCase(lawyer.id)}
-                              disabled={lawyer.availableCases <= 0}
-                              className="text-xs px-2 py-1"
-                            >
-                              أخذ قضية
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => {
-                                setSelectedLawyerForCase(lawyer.id);
-                                setTakeCaseDialogOpen(true);
-                              }}
-                              disabled={lawyer.availableCases <= 0}
-                              className="text-xs px-2 py-1"
-                            >
-                              أخذ قضية بتاريخ
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => {
-                                setSelectedLawyerId(lawyer.id);
-                                setOrderDialogOpen(true);
-                              }}
-                              className="text-xs px-2 py-1"
-                            >
-                              إعداد طلب
-                            </Button>
-                          </>
-                        )}
+                      <Badge variant="outline" className="bg-info/10 text-info border-info/20">
+                        {lawyer.reorders || 0}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
                         <Button
-                          size="sm"
                           variant="outline"
-                          onClick={() => openEditDialog(lawyer)}
+                          size="sm"
+                          onClick={() => editLawyer(lawyer)}
+                          className="h-8 w-8 p-0"
                         >
                           <Edit className="h-4 w-4" />
                         </Button>
                         <Button
-                          size="sm"
                           variant="outline"
+                          size="sm"
+                          onClick={() => handleReorder(lawyer)}
+                          className="h-8 w-8 p-0 text-primary hover:text-primary"
+                        >
+                          <RefreshCw className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
                           onClick={() => deleteLawyer(lawyer.id)}
+                          className="h-8 w-8 p-0 text-destructive hover:text-destructive"
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -1000,380 +733,188 @@ export function LawyersTab({ lawyers, setLawyers, expenses, setExpenses, campaig
         </CardContent>
       </Card>
 
-      {/* Dialog إعداد الطلب */}
-      <Dialog open={orderDialogOpen} onOpenChange={setOrderDialogOpen}>
-        <DialogContent className="sm:max-w-[425px]">
-          <DialogHeader>
-            <DialogTitle>إعداد طلب قضايا جديدة</DialogTitle>
-            <DialogDescription>
-              {selectedLawyerId && (
-                `إضافة قضايا جديدة للمحامي ${lawyers.find(l => l.id === selectedLawyerId)?.name}`
-              )}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="grid gap-2">
-              <Label htmlFor="orderDate">تاريخ الطلب</Label>
-              <Input
-                id="orderDate"
-                type="date"
-                value={orderDate}
-                onChange={(e) => setOrderDate(e.target.value)}
-                placeholder="تاريخ الطلب"
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="orderCases">عدد القضايا المطلوبة</Label>
-              <Input
-                id="orderCases"
-                type="number"
-                min="1"
-                value={orderCases}
-                onChange={(e) => setOrderCases(parseInt(e.target.value) || 1)}
-                placeholder="عدد القضايا"
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="orderTotalAmount">المبلغ الإجمالي (ج.م)</Label>
-              <Input
-                id="orderTotalAmount"
-                type="number"
-                min="0"
-                step="0.01"
-                value={selectedLawyerId ? ((lawyers.find(l => l.id === selectedLawyerId)?.pricePerCase || 0) * orderCases) : 0}
-                onChange={(e) => {
-                  const totalAmount = parseFloat(e.target.value) || 0;
-                  const newPricePerCase = orderCases > 0 ? totalAmount / orderCases : 0;
-                  if (selectedLawyerId) {
-                    setLawyers(lawyers.map(l => 
-                      l.id === selectedLawyerId 
-                        ? { ...l, pricePerCase: newPricePerCase }
-                        : l
-                    ));
-                  }
-                }}
-                placeholder="المبلغ الإجمالي لجميع القضايا"
-              />
-            </div>
-            {selectedLawyerId && (
-              <div className="grid gap-2">
-                <div className="text-sm text-gray-600 bg-blue-50 p-3 rounded border border-blue-200">
-                  <p className="text-blue-800">سعر القضية الواحدة: {(orderCases > 0 ? ((lawyers.find(l => l.id === selectedLawyerId)?.pricePerCase || 0) * orderCases) / orderCases : 0).toLocaleString('ar-EG')} ج.م</p>
-                </div>
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setOrderDialogOpen(false)}>
-              إلغاء
-            </Button>
-            <Button onClick={createOrder}>
-              إنشاء الطلب
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Dialog الاشتراك */}
-      <Dialog open={subscriptionDialogOpen} onOpenChange={setSubscriptionDialogOpen}>
-        <DialogContent className="sm:max-w-[425px]">
-          <DialogHeader>
-            <DialogTitle>اشتراك المحامي</DialogTitle>
-            <DialogDescription>
-              {selectedLawyerId && (
-                `تحديد عدد القضايا والسعر للمحامي ${lawyers.find(l => l.id === selectedLawyerId)?.name}`
-              )}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="grid gap-2">
-              <Label htmlFor="subscriptionCases">عدد القضايا</Label>
-              <Input
-                id="subscriptionCases"
-                type="number"
-                min="1"
-                value={subscriptionCases}
-                onChange={(e) => setSubscriptionCases(parseInt(e.target.value) || 1)}
-                placeholder="عدد القضايا"
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="totalAmount">المبلغ الإجمالي (ج.م)</Label>
-              <Input
-                id="totalAmount"
-                type="number"
-                min="0"
-                step="0.01"
-                value={subscriptionCases * subscriptionPrice}
-                onChange={(e) => {
-                  const totalAmount = parseFloat(e.target.value) || 0;
-                  setSubscriptionPrice(subscriptionCases > 0 ? totalAmount / subscriptionCases : 0);
-                }}
-                placeholder="المبلغ الإجمالي"
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="pricePerCase">سعر القضية الواحدة (ج.م)</Label>
-              <Input
-                id="pricePerCase"
-                type="number"
-                min="0"
-                step="0.01"
-                value={subscriptionPrice}
-                placeholder="سعر القضية الواحدة"
-                readOnly
-                className="bg-gray-50"
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="subscriptionDate">تاريخ الاشتراك</Label>
-              <Input
-                id="subscriptionDate"
-                type="date"
-                value={subscriptionDate}
-                onChange={(e) => setSubscriptionDate(e.target.value)}
-                className="text-right"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSubscriptionDialogOpen(false)}>
-              إلغاء
-            </Button>
-            <Button onClick={createSubscription} disabled={subscriptionCases * subscriptionPrice <= 0}>
-              تأكيد الاشتراك
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* نافذة تعديل المحامي */}
-      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-        <DialogContent className="max-w-md">
+      {/* Edit Dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent className="sm:max-w-[500px]">
           <DialogHeader>
             <DialogTitle>تعديل بيانات المحامي</DialogTitle>
-            <DialogDescription>
-              يمكنك تعديل بيانات المحامي أو إلغاء اشتراكه
-            </DialogDescription>
+            <DialogDescription>تعديل بيانات المحامي في النظام</DialogDescription>
           </DialogHeader>
-          {editingLawyer && (
-            <div className="grid gap-4 py-4">
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="edit-name" className="text-right">
-                  الاسم
-                </Label>
+          <div className="grid gap-4 py-4 max-h-[60vh] overflow-y-auto">
+            <div className="grid gap-2">
+              <Label htmlFor="editName">الاسم *</Label>
+              <Input
+                id="editName"
+                value={editingLawyer?.name || ""}
+                onChange={(e) => setEditingLawyer(editingLawyer ? { ...editingLawyer, name: e.target.value } : null)}
+                placeholder="اسم المحامي"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="editPhone">رقم الهاتف *</Label>
+              <Input
+                id="editPhone"
+                value={editingLawyer?.phone || ""}
+                onChange={(e) => setEditingLawyer(editingLawyer ? { ...editingLawyer, phone: e.target.value } : null)}
+                placeholder="+20 1XX XXX XXXX"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="editGovernorate">المحافظة</Label>
                 <Input
-                  id="edit-name"
-                  value={editingLawyer.name}
-                  onChange={(e) => setEditingLawyer({ ...editingLawyer, name: e.target.value })}
-                  className="col-span-3"
+                  id="editGovernorate"
+                  value={editingLawyer?.governorate || ""}
+                  onChange={(e) => setEditingLawyer(editingLawyer ? { ...editingLawyer, governorate: e.target.value } : null)}
+                  placeholder="المحافظة"
                 />
               </div>
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="edit-phone" className="text-right">
-                  الهاتف
-                </Label>
-                <Input
-                  id="edit-phone"
-                  value={editingLawyer.phone}
-                  onChange={(e) => setEditingLawyer({ ...editingLawyer, phone: e.target.value })}
-                  className="col-span-3"
-                />
-              </div>
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="edit-governorate" className="text-right">
-                  المحافظة
-                </Label>
-                <Select
-                  value={editingLawyer.governorate || ""}
-                  onValueChange={(value) => setEditingLawyer({ ...editingLawyer, governorate: value })}
+              <div className="grid gap-2">
+                <Label htmlFor="editGender">النوع</Label>
+                <Select 
+                  value={editingLawyer?.gender || "ذكر"} 
+                  onValueChange={(value) => setEditingLawyer(editingLawyer ? { ...editingLawyer, gender: value } : null)}
                 >
-                  <SelectTrigger className="col-span-3">
-                    <SelectValue placeholder="اختر المحافظة" />
+                  <SelectTrigger>
+                    <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="القاهرة">القاهرة</SelectItem>
-                    <SelectItem value="الجيزة">الجيزة</SelectItem>
-                    <SelectItem value="الإسكندرية">الإسكندرية</SelectItem>
-                    <SelectItem value="الدقهلية">الدقهلية</SelectItem>
-                    <SelectItem value="الشرقية">الشرقية</SelectItem>
-                    <SelectItem value="القليوبية">القليوبية</SelectItem>
-                    <SelectItem value="كفر الشيخ">كفر الشيخ</SelectItem>
-                    <SelectItem value="الغربية">الغربية</SelectItem>
-                    <SelectItem value="المنوفية">المنوفية</SelectItem>
-                    <SelectItem value="البحيرة">البحيرة</SelectItem>
-                    <SelectItem value="الإسماعيلية">الإسماعيلية</SelectItem>
-                    <SelectItem value="بورسعيد">بورسعيد</SelectItem>
-                    <SelectItem value="السويس">السويس</SelectItem>
-                    <SelectItem value="المنيا">المنيا</SelectItem>
-                    <SelectItem value="بني سويف">بني سويف</SelectItem>
-                    <SelectItem value="الفيوم">الفيوم</SelectItem>
-                    <SelectItem value="أسيوط">أسيوط</SelectItem>
-                    <SelectItem value="سوهاج">سوهاج</SelectItem>
-                    <SelectItem value="قنا">قنا</SelectItem>
-                    <SelectItem value="أسوان">أسوان</SelectItem>
-                    <SelectItem value="الأقصر">الأقصر</SelectItem>
-                    <SelectItem value="البحر الأحمر">البحر الأحمر</SelectItem>
-                    <SelectItem value="الوادي الجديد">الوادي الجديد</SelectItem>
-                    <SelectItem value="مطروح">مطروح</SelectItem>
-                    <SelectItem value="شمال سيناء">شمال سيناء</SelectItem>
-                    <SelectItem value="جنوب سيناء">جنوب سيناء</SelectItem>
+                    <SelectItem value="ذكر">ذكر</SelectItem>
+                    <SelectItem value="انثى">انثى</SelectItem>
                   </SelectContent>
                 </Select>
-              </div>
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="edit-campaignId" className="text-right">
-                  الحملة التسويقية
-                </Label>
-                <Select
-                  value={editingLawyer.campaignId || ""}
-                  onValueChange={(value) => setEditingLawyer({ ...editingLawyer, campaignId: value })}
-                >
-                  <SelectTrigger className="col-span-3">
-                    <SelectValue placeholder="اختر الحملة التسويقية" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">بدون حملة</SelectItem>
-                    {campaigns.map((campaign) => (
-                      <SelectItem key={campaign.id} value={campaign.id}>
-                        {campaign.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="edit-hasFreeCaseUsed" className="text-right">
-                  القضية المجانية
-                </Label>
-                <div className="col-span-3 flex items-center space-x-2">
-                  <Checkbox
-                    id="edit-hasFreeCaseUsed"
-                    checked={editingLawyer.hasFreeCaseUsed || false}
-                    onCheckedChange={(checked) => setEditingLawyer({ ...editingLawyer, hasFreeCaseUsed: !!checked })}
-                  />
-                  <Label htmlFor="edit-hasFreeCaseUsed">استخدم القضية المجانية</Label>
-                </div>
-              </div>
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="edit-available-cases" className="text-right">
-                  القضايا المتاحة
-                </Label>
-                <Input
-                  id="edit-available-cases"
-                  type="number"
-                  value={editingLawyer.availableCases}
-                  onChange={(e) => setEditingLawyer({ ...editingLawyer, availableCases: parseInt(e.target.value) || 0 })}
-                  className="col-span-3"
-                  disabled={!editingLawyer.isSubscribed}
-                />
-              </div>
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="edit-taken-cases" className="text-right">
-                  القضايا المأخوذة
-                </Label>
-                <Input
-                  id="edit-taken-cases"
-                  type="number"
-                  value={editingLawyer.takenCases}
-                  onChange={(e) => setEditingLawyer({ ...editingLawyer, takenCases: parseInt(e.target.value) || 0 })}
-                  className="col-span-3"
-                  disabled={!editingLawyer.isSubscribed}
-                />
-              </div>
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="edit-total-revenue" className="text-right">
-                  المبلغ الإجمالي
-                </Label>
-                <Input
-                  id="edit-total-revenue"
-                  type="number"
-                  value={(editingLawyer.takenCases || 0) * (editingLawyer.pricePerCase || 0)}
-                  onChange={(e) => {
-                    const totalRevenue = parseFloat(e.target.value) || 0;
-                    const takenCases = editingLawyer.takenCases || 0;
-                    const pricePerCase = takenCases > 0 ? totalRevenue / takenCases : 0;
-                    setEditingLawyer({ ...editingLawyer, pricePerCase });
-                  }}
-                  className="col-span-3"
-                  disabled={!editingLawyer.isSubscribed}
-                />
-              </div>
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="edit-price" className="text-right">
-                  سعر القضية الواحدة
-                </Label>
-                <Input
-                  id="edit-price"
-                  type="number"
-                  value={editingLawyer.pricePerCase}
-                  onChange={(e) => setEditingLawyer({ ...editingLawyer, pricePerCase: parseFloat(e.target.value) || 0 })}
-                  className="col-span-3"
-                  disabled={!editingLawyer.isSubscribed}
-                  readOnly
-                />
-              </div>
-              <div className="flex justify-center pt-2">
-                {editingLawyer.isSubscribed ? (
-                  <Button
-                    variant="destructive"
-                    onClick={cancelSubscription}
-                    className="w-full"
-                  >
-                    إلغاء الاشتراك
-                  </Button>
-                ) : (
-                   <Button
-                     variant="default"
-                     onClick={activateSubscription}
-                     className="w-full"
-                   >
-                     تفعيل الاشتراك
-                   </Button>
-                 )}
               </div>
             </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditDialogOpen(false)}>
-              إلغاء
-            </Button>
-            <Button onClick={saveEditedLawyer}>
-              حفظ التغييرات
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* حوار أخذ قضية مع تاريخ مخصص */}
-      <Dialog open={takeCaseDialogOpen} onOpenChange={setTakeCaseDialogOpen}>
-        <DialogContent className="sm:max-w-[425px]">
-          <DialogHeader>
-            <DialogTitle>أخذ قضية بتاريخ مخصص</DialogTitle>
-            <DialogDescription>
-              حدد التاريخ الذي تم أخذ القضية فيه
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="case-date" className="text-right">
-                تاريخ أخذ القضية
-              </Label>
-              <Input
-                id="case-date"
-                type="date"
-                value={customCaseDate}
-                onChange={(e) => setCustomCaseDate(e.target.value)}
-                className="col-span-3"
+            <div className="grid grid-cols-3 gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="editMaxCases">إجمالي القضايا</Label>
+                <Input
+                  id="editMaxCases"
+                  type="number"
+                  value={editingLawyer?.maxCases || 0}
+                  onChange={(e) => setEditingLawyer(editingLawyer ? { 
+                    ...editingLawyer, 
+                    maxCases: parseInt(e.target.value) || 0,
+                    availableCases: (parseInt(e.target.value) || 0) - (editingLawyer.takenCases || 0)
+                  } : null)}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="editTakenCases">القضايا المأخوذة</Label>
+                <Input
+                  id="editTakenCases"
+                  type="number"
+                  value={editingLawyer?.takenCases || 0}
+                  onChange={(e) => setEditingLawyer(editingLawyer ? { 
+                    ...editingLawyer, 
+                    takenCases: parseInt(e.target.value) || 0,
+                    availableCases: (editingLawyer.maxCases || 0) - (parseInt(e.target.value) || 0)
+                  } : null)}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="editPricePerCase">سعر القضية</Label>
+                <Input
+                  id="editPricePerCase"
+                  type="number"
+                  value={editingLawyer?.pricePerCase || 0}
+                  onChange={(e) => setEditingLawyer(editingLawyer ? { ...editingLawyer, pricePerCase: parseFloat(e.target.value) || 0 } : null)}
+                />
+              </div>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="editNotes">ملاحظات</Label>
+              <Textarea
+                id="editNotes"
+                value={editingLawyer?.notes || ""}
+                onChange={(e) => setEditingLawyer(editingLawyer ? { ...editingLawyer, notes: e.target.value } : null)}
+                placeholder="ملاحظات إضافية"
               />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setTakeCaseDialogOpen(false)}>
-              إلغاء
-            </Button>
-            <Button onClick={takeCaseWithCustomDate}>
-              أخذ القضية
+            <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>إلغاء</Button>
+            <Button onClick={updateLawyer}>حفظ التغييرات</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reorder Dialog */}
+      <Dialog open={isReorderDialogOpen} onOpenChange={setIsReorderDialogOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>إعادة طلب قضايا</DialogTitle>
+            <DialogDescription>
+              إضافة قضايا جديدة للمحامي {reorderingLawyer?.name}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="bg-muted p-4 rounded-lg space-y-2">
+              <div className="flex justify-between">
+                <span>القضايا الحالية:</span>
+                <span className="font-bold">{reorderingLawyer?.maxCases || 0}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>القضايا المتاحة:</span>
+                <span className="font-bold text-success">{reorderingLawyer?.availableCases || 0}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>سعر القضية:</span>
+                <span className="font-bold">{(reorderingLawyer?.pricePerCase || 0).toLocaleString('ar-EG')} ج.م</span>
+              </div>
+              <div className="flex justify-between">
+                <span>الإيرادات الحالية:</span>
+                <span className="font-bold text-success">{(reorderingLawyer?.revenue || 0).toLocaleString('ar-EG')} ج.م</span>
+              </div>
+            </div>
+            
+            <div className="grid gap-2">
+              <Label htmlFor="reorderCases">عدد القضايا الجديدة</Label>
+              <Input
+                id="reorderCases"
+                type="number"
+                min="1"
+                value={reorderCases}
+                onChange={(e) => setReorderCases(parseInt(e.target.value) || 1)}
+                placeholder="عدد القضايا المطلوب إضافتها"
+              />
+            </div>
+
+            <div className="bg-primary/10 p-4 rounded-lg border border-primary/20">
+              <h4 className="font-semibold text-primary mb-2">ملخص إعادة الطلب:</h4>
+              <div className="space-y-1 text-sm">
+                <div className="flex justify-between">
+                  <span>القضايا الجديدة:</span>
+                  <span className="font-bold">+{reorderCases}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>إجمالي القضايا بعد الإضافة:</span>
+                  <span className="font-bold">{(reorderingLawyer?.maxCases || 0) + reorderCases}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>القضايا المتاحة الجديدة:</span>
+                  <span className="font-bold text-success">{(reorderingLawyer?.availableCases || 0) + reorderCases}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>التكلفة الإضافية:</span>
+                  <span className="font-bold text-primary">
+                    {(reorderCases * (reorderingLawyer?.pricePerCase || 0)).toLocaleString('ar-EG')} ج.م
+                  </span>
+                </div>
+                <div className="flex justify-between border-t pt-2">
+                  <span>إجمالي الإيرادات الجديدة:</span>
+                  <span className="font-bold text-success">
+                    {((reorderingLawyer?.revenue || 0) + (reorderCases * (reorderingLawyer?.pricePerCase || 0))).toLocaleString('ar-EG')} ج.م
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsReorderDialogOpen(false)}>إلغاء</Button>
+            <Button onClick={processReorder} className="bg-primary">
+              <RefreshCw className="ml-2 h-4 w-4" />
+              إنشاء الطلب
             </Button>
           </DialogFooter>
         </DialogContent>
